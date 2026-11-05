@@ -1,0 +1,173 @@
+{
+  "effectcraftAnimationPreset": 2,
+  "effects": [],
+  "name": "Fade Up",
+  "properties": [
+    {
+      "expression": null,
+      "keys": [
+        {
+          "auto_bezier": false,
+          "continuous": false,
+          "in_ease": [],
+          "in_interp": "Linear",
+          "out_ease": [],
+          "out_interp": "Linear",
+          "roving": false,
+          "spatial_auto": true,
+          "spatial_continuous": false,
+          "spatial_in": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "spatial_out": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time": 0,
+          "value": {
+            "t": "Vec3",
+            "v": [
+              100.0,
+              100.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "auto_bezier": false,
+          "continuous": false,
+          "in_ease": [],
+          "in_interp": "Linear",
+          "out_ease": [],
+          "out_interp": "Linear",
+          "roving": false,
+          "spatial_auto": true,
+          "spatial_continuous": false,
+          "spatial_in": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "spatial_out": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time": 254016000000,
+          "value": {
+            "t": "Vec3",
+            "v": [
+              400.0,
+              200.0,
+              0.0
+            ]
+          }
+        },
+        {
+          "auto_bezier": false,
+          "continuous": false,
+          "in_ease": [],
+          "in_interp": "Linear",
+          "out_ease": [],
+          "out_interp": "Linear",
+          "roving": false,
+          "spatial_auto": true,
+          "spatial_continuous": false,
+          "spatial_in": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "spatial_out": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time": 508032000000,
+          "value": {
+            "t": "Vec3",
+            "v": [
+              600.0,
+              300.0,
+              0.0
+            ]
+          }
+        }
+      ],
+      "path": "transform/position",
+      "value": {
+        "t": "Vec3",
+        "v": [
+          320.0,
+          180.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "expression": null,
+      "keys": [
+        {
+          "auto_bezier": false,
+          "continuous": false,
+          "in_ease": [],
+          "in_interp": "Linear",
+          "out_ease": [],
+          "out_interp": "Linear",
+          "roving": false,
+          "spatial_auto": true,
+          "spatial_continuous": false,
+          "spatial_in": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "spatial_out": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time": 0,
+          "value": {
+            "t": "Scalar",
+            "v": 0.0
+          }
+        },
+        {
+          "auto_bezier": false,
+          "continuous": false,
+          "in_ease": [],
+          "in_interp": "Linear",
+          "out_ease": [],
+          "out_interp": "Linear",
+          "roving": false,
+          "spatial_auto": true,
+          "spatial_continuous": false,
+          "spatial_in": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "spatial_out": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "time": 254016000000,
+          "value": {
+            "t": "Scalar",
+            "v": 100.0
+          }
+        }
+      ],
+      "path": "transform/opacity",
+      "value": {
+        "t": "Scalar",
+        "v": 100.0
+      }
+    }
+  ]
+}

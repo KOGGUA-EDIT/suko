@@ -1,0 +1,11 @@
+{
+  "effectcraftAnimationPreset": 2,
+  "effects": [
+    {
+      "name": "高斯模糊",
+      "matchName": "ec.blur.gaussian"
+    }
+  ],
+  "name": "Bloom Only",
+  "properties": []
+}

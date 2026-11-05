@@ -1,0 +1,6 @@
+tools/
+*.log
+*.ecproj
+EffectCraft Auto-Save/
+.DS_Store
+Thumbs.db
