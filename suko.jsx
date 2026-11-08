@@ -1,11 +1,11 @@
 /*
  * suko — preset manager for EffectCraft
  * A single-canvas ScriptUI panel: folder rail, subfolder chips, preset grid, zoom,
- * onboarding and settings.  v1.0.0
+ * onboarding and settings.  v1.1.0
  */
 (function (thisObj) {
   var IS_PANEL = thisObj instanceof Panel;
-  var VERSION = "1.0.0";
+  var VERSION = "1.1.0";
   var SECTION = "suko";
   var SETTINGS_KEY = "state";
   var CONFIG_NAME = "suko.config.json";
