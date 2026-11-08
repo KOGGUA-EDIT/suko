@@ -62,6 +62,8 @@
   var menu = null;
   var lastClick = null;
   var lastPaint = 0;
+  var lastCanvasW = -1, lastCanvasH = -1;
+  var drawing = false;
   var lastError = "";
   var errorLogged = false;
   var toastText = "";
@@ -75,6 +77,13 @@
   var settingsError = "";
   var fontCache = {};
   var docsCache = "";
+  var WIDTH_CACHE = {}, WIDTH_CACHE_N = 0;
+  var BRUSH_CACHE = {}, BRUSH_N = 0, BRUSH_G = null;
+  var PEN_CACHE = {}, PEN_N = 0, PEN_G = null;
+  var PRESET_CACHE = { key: "", list: null };
+  var RECENT_MAP = { version: -1, map: null };
+  var DATA_VERSION = 0;
+  var CACHE_LIB = "";
 
   // ---------------------------------------------------------------- small helpers
   function nowMs() { return (new Date()).getTime(); }
@@ -129,12 +138,19 @@
   }
   function visualWidth(s, size) {
     s = String(s);
+    var key = "$" + s;
+    var bySize = WIDTH_CACHE[size];
+    if (bySize && Object.prototype.hasOwnProperty.call(bySize, key)) return bySize[key];
     var w = 0, i, c;
     for (i = 0; i < s.length; i++) {
       c = s.charCodeAt(i);
       w += (c >= 0x2e80 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) ||
            (c >= 0xff00 && c <= 0xffef) || c === 0x2026 ? size * 1.12 : size * 0.56;
     }
+    if (!bySize) { bySize = WIDTH_CACHE[size] = {}; }
+    if (WIDTH_CACHE_N >= 4000) { WIDTH_CACHE = {}; WIDTH_CACHE_N = 0; bySize = WIDTH_CACHE[size] = {}; }
+    bySize[key] = w;
+    WIDTH_CACHE_N++;
     return w;
   }
   function ellipsize(s, size, maxW) {
@@ -417,7 +433,7 @@
   function readPreset(file, catId, subId) {
     var path = normPath(file.fsName || file);
     var mtime = 0;
-    try { mtime = file.modified ? file.modified.getTime() : 0; } catch (e0) {}
+    try { if (file.modified) mtime = file.modified.getTime(); } catch (e0) {}
     var ck = path + "|" + mtime;
     if (CACHE[ck]) return CACHE[ck];
     var p = {
@@ -470,8 +486,20 @@
       var rootPath = normPath(S.library);
       p.rel = path.indexOf(rootPath + "/") === 0 ? path.substring(rootPath.length + 1) : path;
     } catch (e3) { p.rel = path; }
+    p.hay = (p.name + " " + p.filename + " " + p.rel + " " + p.meta + " " + p.effectNames.join(" ")).toLowerCase();
+    p.rowCol = hsl(p.hue * 360 + 40, 0.5, 0.46);
+    p.thumbCol = hsl(p.hue * 360 + 18, 0.38, 0.20);
     CACHE[ck] = p;
     return p;
+  }
+  function pruneCache() {
+    var live = {}, i, k;
+    for (i = 0; i < ALL.length; i++) live[ALL[i].path] = ALL[i].mtime;
+    for (k in CACHE) {
+      if (!Object.prototype.hasOwnProperty.call(CACHE, k)) continue;
+      var p = CACHE[k];
+      if (!p || live[p.path] === undefined || live[p.path] !== p.mtime) delete CACHE[k];
+    }
   }
   function readFolder(folder, catId, subId) {
     var files = presetFiles(folder), out = [], i;
@@ -483,9 +511,12 @@
   }
   function scanLibrary() {
     var rootFolder = new Folder(S.library);
+    if (CACHE_LIB !== S.library) { CACHE = {}; CACHE_LIB = S.library; }
     ALL = []; CATS = []; CAT_BY_ID = {};
     if (!rootFolder.exists) {
       S.current = "";
+      DATA_VERSION++;
+      PRESET_CACHE.key = "";
       return false;
     }
     var i, j, top, sub;
@@ -518,7 +549,7 @@
       }
     }
     ALL.sort(function (a, b) { return a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1; });
-    if (!S.selected || S.selected === CAT_ALL || S.selected === CAT_RECENT || !CAT_BY_ID[S.selected]) {
+    if (!S.selected || (S.selected !== CAT_ALL && S.selected !== CAT_RECENT && !CAT_BY_ID[S.selected])) {
       S.selected = CATS.length ? CATS[0].id : "";
     }
     if (S.selected && S.selected.indexOf("c:") === 0) {
@@ -529,19 +560,33 @@
     var curFound = false;
     for (i = 0; i < ALL.length; i++) if (ALL[i].path === S.current) curFound = true;
     if (!curFound) S.current = "";
+    pruneCache();
+    DATA_VERSION++;
+    PRESET_CACHE.key = "";
     return true;
   }
   function recentPresets() {
-    var by = {}, out = [], i;
-    for (i = 0; i < ALL.length; i++) by[ALL[i].path] = ALL[i];
-    for (i = 0; i < S.recent.length; i++) if (by[S.recent[i]]) out.push(by[S.recent[i]]);
+    if (RECENT_MAP.version !== DATA_VERSION) {
+      var by = {}, i;
+      for (i = 0; i < ALL.length; i++) by[ALL[i].path] = ALL[i];
+      RECENT_MAP.version = DATA_VERSION;
+      RECENT_MAP.map = by;
+    }
+    var out = [], map = RECENT_MAP.map;
+    for (var j = 0; j < S.recent.length; j++) if (map[S.recent[j]]) out.push(map[S.recent[j]]);
     return out;
   }
   function currentCategory() {
     if (S.selected === CAT_ALL || S.selected === CAT_RECENT) return null;
     return CAT_BY_ID[S.selected] || null;
   }
+  function presetsCacheKey() {
+    return DATA_VERSION + "|" + S.selected + "|" + S.sub + "|" + trimStr(S.search).toLowerCase() +
+      (S.selected === CAT_RECENT ? "|" + S.recent.join(",") : "");
+  }
   function currentPresets() {
+    var key = presetsCacheKey();
+    if (PRESET_CACHE.list && PRESET_CACHE.key === key) return PRESET_CACHE.list;
     var base = [], i, cat;
     if (S.selected === CAT_RECENT) base = recentPresets();
     else if (!S.selected) base = ALL.slice();
@@ -560,11 +605,13 @@
       var out = [];
       for (i = 0; i < base.length; i++) {
         var p = base[i];
-        var hay = (p.name + " " + p.filename + " " + p.rel + " " + p.meta + " " + p.effectNames.join(" ")).toLowerCase();
+        var hay = p.hay || (p.name + " " + p.filename + " " + p.rel + " " + p.meta + " " + p.effectNames.join(" ")).toLowerCase();
         if (hay.indexOf(q) >= 0) out.push(p);
       }
-      return out;
+      base = out;
     }
+    PRESET_CACHE.key = key;
+    PRESET_CACHE.list = base;
     return base;
   }
   function selectedFolderPath() {
@@ -678,7 +725,6 @@
       try {
         if (!app.run) throw new Error("当前版本不支持保存预设");
         app.run("anim.savePreset", { path: path, name: trimStr(name) });
-        CACHE = {};
         scanLibrary();
         S.current = normPath(path);
         saveState(true);
@@ -711,7 +757,6 @@
     S.configDir = cv.path;
     S.onboarded = true;
     onboardError = "";
-    CACHE = {};
     scanLibrary();
     UI.onboarding = false;
     focus = null;
@@ -759,7 +804,6 @@
     if (settingsDraft.lang === "zh" || settingsDraft.lang === "en") S.lang = settingsDraft.lang;
     S.onboarded = true;
     settingsError = "";
-    CACHE = {};
     scanLibrary();
     UI.settings = false;
     settingsDraft = null;
@@ -922,7 +966,6 @@
       var ok = false;
       try { ok = f.create(); } catch (e) {}
       if (!ok) { showToast("无法创建文件夹", "warn"); return; }
-      CACHE = {};
       scanLibrary();
       if (parentCatId) {
         S.selected = parentCatId;
@@ -983,44 +1026,78 @@
   }
 
   // ---------------------------------------------------------------- drawing primitives
-  function roundPath(g, x, y, w, h, r, segOverride) {
-    r = Math.max(0, Math.min(r, Math.min(w, h) / 2));
-    var i, a, seg = segOverride || Math.max(3, Math.min(6, Math.round(r * 0.4)));
-    g.newPath();
-    g.moveTo(x + r, y);
-    g.lineTo(x + w - r, y);
-    for (i = 1; i <= seg; i++) { a = -Math.PI / 2 + (Math.PI / 2) * i / seg; g.lineTo(x + w - r + Math.cos(a) * r, y + r + Math.sin(a) * r); }
-    g.lineTo(x + w, y + h - r);
-    for (i = 1; i <= seg; i++) { a = (Math.PI / 2) * i / seg; g.lineTo(x + w - r + Math.cos(a) * r, y + h - r + Math.sin(a) * r); }
-    g.lineTo(x + r, y + h);
-    for (i = 1; i <= seg; i++) { a = Math.PI / 2 + (Math.PI / 2) * i / seg; g.lineTo(x + r + Math.cos(a) * r, y + h - r + Math.sin(a) * r); }
-    g.lineTo(x, y + r);
-    for (i = 1; i <= seg; i++) { a = Math.PI + (Math.PI / 2) * i / seg; g.lineTo(x + r + Math.cos(a) * r, y + r + Math.sin(a) * r); }
+  function colorKey(color, width) {
+    color = color || [1, 1, 1, 1];
+    return Math.round(color[0] * 1000) + "," + Math.round(color[1] * 1000) + "," +
+           Math.round(color[2] * 1000) + "," + Math.round(color[3] * 1000) + (width ? "|" + width : "");
+  }
+  function cachedBrush(g, color) {
+    if (g !== BRUSH_G) { BRUSH_CACHE = {}; BRUSH_N = 0; BRUSH_G = g; }
+    var k = colorKey(color, 0), b = BRUSH_CACHE[k];
+    if (!b) {
+      if (BRUSH_N > 600) { BRUSH_CACHE = {}; BRUSH_N = 0; }
+      b = g.newBrush(g.BrushType.SOLID_COLOR, color || [1, 1, 1, 1]);
+      BRUSH_CACHE[k] = b;
+      BRUSH_N++;
+    }
+    return b;
+  }
+  function cachedPen(g, color, width) {
+    if (g !== PEN_G) { PEN_CACHE = {}; PEN_N = 0; PEN_G = g; }
+    width = width || 1;
+    var k = colorKey(color, width), p = PEN_CACHE[k];
+    if (!p) {
+      if (PEN_N > 600) { PEN_CACHE = {}; PEN_N = 0; }
+      p = g.newPen(g.PenType.SOLID_COLOR, color || [1, 1, 1, 1], width);
+      PEN_CACHE[k] = p;
+      PEN_N++;
+    }
+    return p;
+  }
+  function roundSubpath(g, x, y, w, h, r, segOverride) {
+    // 性能优先：所有“圆角”一律画直角，省掉每个圆角 8-24 个 lineTo。
+    g.moveTo(x, y);
+    g.lineTo(x + w, y);
+    g.lineTo(x + w, y + h);
+    g.lineTo(x, y + h);
     g.closePath();
+  }
+  function roundPath(g, x, y, w, h, r, segOverride) {
+    g.newPath();
+    roundSubpath(g, x, y, w, h, r, segOverride);
   }
   function fillRound(g, x, y, w, h, r, color, seg) {
     if (w <= 0 || h <= 0) return;
+    if (r <= 1.5) { g.newPath(); g.rectPath(x, y, w, h); g.fillPath(cachedBrush(g, color)); return; }
     roundPath(g, x, y, w, h, r, seg);
-    g.fillPath(g.newBrush(g.BrushType.SOLID_COLOR, color));
+    g.fillPath(cachedBrush(g, color));
   }
   function strokeRound(g, x, y, w, h, r, color, width) {
     if (w <= 0 || h <= 0) return;
+    if (r <= 1.5) { g.newPath(); g.rectPath(x, y, w, h); g.strokePath(cachedPen(g, color, width)); return; }
     roundPath(g, x, y, w, h, r);
-    g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width || 1));
+    g.strokePath(cachedPen(g, color, width));
+  }
+  function fillStrokeRound(g, x, y, w, h, r, fillColor, strokeColor, width) {
+    if (w <= 0 || h <= 0) return;
+    if (r <= 1.5) { g.newPath(); g.rectPath(x, y, w, h); }
+    else roundPath(g, x, y, w, h, r);
+    g.fillPath(cachedBrush(g, fillColor));
+    g.strokePath(cachedPen(g, strokeColor, width || 1));
   }
   function line(g, x1, y1, x2, y2, color, width) {
     g.newPath(); g.moveTo(x1, y1); g.lineTo(x2, y2);
-    g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color || C.line, width || 1));
+    g.strokePath(cachedPen(g, color || C.line, width || 1));
   }
   function fillRect(g, x, y, w, h, color) {
     if (w <= 0 || h <= 0) return;
     g.newPath(); g.rectPath(x, y, w, h);
-    g.fillPath(g.newBrush(g.BrushType.SOLID_COLOR, color));
+    g.fillPath(cachedBrush(g, color));
   }
   function circle(g, x, y, r, fillColor, strokeColor, strokeW) {
     g.newPath(); g.ellipsePath(x - r, y - r, r * 2, r * 2);
-    if (fillColor) g.fillPath(g.newBrush(g.BrushType.SOLID_COLOR, fillColor));
-    if (strokeColor) g.strokePath(g.newPen(g.PenType.SOLID_COLOR, strokeColor, strokeW || 1));
+    if (fillColor) g.fillPath(cachedBrush(g, fillColor));
+    if (strokeColor) g.strokePath(cachedPen(g, strokeColor, strokeW || 1));
   }
   function arcPath(g, cx, cy, r, a0, a1, steps) {
     steps = steps || 16;
@@ -1085,9 +1162,9 @@
     return t;
   }
   function drawText(g, s, x, y, size, color, bold) {
-    s = l10n(s);
+    if (S.lang === "en") s = l10n(s);
     try { g.font = font(size, bold); } catch (e) { g.font = (bold ? "bold " : "") + size + "px " + FONT_FAMILY; }
-    g.drawString(String(s), g.newPen(g.PenType.SOLID_COLOR, color || C.text, 1), x, y);
+    g.drawString(String(s), cachedPen(g, color || C.text, 1), x, y);
   }
   function textBox(g, s, x, y, w, h, size, color, align, bold, maxW) {
     s = String(s === undefined || s === null ? "" : s);
@@ -1116,10 +1193,12 @@
     width = width || 1.4;
     if (name === "grid") {
       var q = sz * 0.36, gp = sz * 0.12;
-      fillRound(g, x, y, q, q, 2, color);
-      fillRound(g, x + q + gp, y, q, q, 2, color);
-      fillRound(g, x, y + q + gp, q, q, 2, color);
-      fillRound(g, x + q + gp, y + q + gp, q, q, 2, color);
+      g.newPath();
+      roundSubpath(g, x, y, q, q, 2);
+      roundSubpath(g, x + q + gp, y, q, q, 2);
+      roundSubpath(g, x, y + q + gp, q, q, 2);
+      roundSubpath(g, x + q + gp, y + q + gp, q, q, 2);
+      g.fillPath(cachedBrush(g, color));
     } else if (name === "folder") {
       g.newPath();
       g.moveTo(x, y + sz * 0.24);
@@ -1130,56 +1209,70 @@
       g.lineTo(x + sz * 0.38, y + sz * 0.18);
       g.lineTo(x, y + sz * 0.18);
       g.closePath();
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "clock") {
       g.newPath(); g.ellipsePath(x + sz * 0.08, y + sz * 0.08, sz * 0.84, sz * 0.84);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
       line(g, cx, cy, cx, cy - sz * 0.22, color, width);
       line(g, cx, cy, cx + sz * 0.16, cy + sz * 0.08, color, width);
     } else if (name === "search") {
       circle(g, cx - sz * 0.08, cy - sz * 0.08, sz * 0.28, null, color, width);
       line(g, cx + sz * 0.13, cy + sz * 0.13, cx + sz * 0.38, cy + sz * 0.38, color, width);
     } else if (name === "plus") {
-      line(g, cx, cy - h * 0.62, cx, cy + h * 0.62, color, width);
-      line(g, cx - h * 0.62, cy, cx + h * 0.62, cy, color, width);
+      g.newPath();
+      g.moveTo(cx, cy - h * 0.62); g.lineTo(cx, cy + h * 0.62);
+      g.moveTo(cx - h * 0.62, cy); g.lineTo(cx + h * 0.62, cy);
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "close") {
-      line(g, x + sz * 0.22, y + sz * 0.22, x + sz * 0.78, y + sz * 0.78, color, width);
-      line(g, x + sz * 0.78, y + sz * 0.22, x + sz * 0.22, y + sz * 0.78, color, width);
+      g.newPath();
+      g.moveTo(x + sz * 0.22, y + sz * 0.22); g.lineTo(x + sz * 0.78, y + sz * 0.78);
+      g.moveTo(x + sz * 0.78, y + sz * 0.22); g.lineTo(x + sz * 0.22, y + sz * 0.78);
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "chevron") {
       g.newPath(); g.moveTo(x + sz * 0.3, y + sz * 0.22); g.lineTo(x + sz * 0.7, y + sz * 0.5); g.lineTo(x + sz * 0.3, y + sz * 0.78);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "back") {
       g.newPath(); g.moveTo(x + sz * 0.62, y + sz * 0.2); g.lineTo(x + sz * 0.32, y + sz * 0.5); g.lineTo(x + sz * 0.62, y + sz * 0.8);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "up") {
       g.newPath(); g.moveTo(x + sz * 0.2, y + sz * 0.62); g.lineTo(x + sz * 0.5, y + sz * 0.3); g.lineTo(x + sz * 0.8, y + sz * 0.62);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "down") {
       g.newPath(); g.moveTo(x + sz * 0.2, y + sz * 0.38); g.lineTo(x + sz * 0.5, y + sz * 0.7); g.lineTo(x + sz * 0.8, y + sz * 0.38);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "check") {
       g.newPath(); g.moveTo(x + sz * 0.2, y + sz * 0.52); g.lineTo(x + sz * 0.42, y + sz * 0.74); g.lineTo(x + sz * 0.82, y + sz * 0.26);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width + 0.4));
+      g.strokePath(cachedPen(g, color, width + 0.4));
     } else if (name === "play") {
       g.newPath(); g.moveTo(x + sz * 0.3, y + sz * 0.18); g.lineTo(x + sz * 0.82, y + sz * 0.5); g.lineTo(x + sz * 0.3, y + sz * 0.82); g.closePath();
-      g.fillPath(g.newBrush(g.BrushType.SOLID_COLOR, color));
+      g.fillPath(cachedBrush(g, color));
     } else if (name === "gear") {
       circle(g, cx, cy, sz * 0.24, null, color, width);
+      g.newPath();
       for (i = 0; i < 8; i++) {
         a = Math.PI * 2 * i / 8;
-        line(g, cx + Math.cos(a) * sz * 0.34, cy + Math.sin(a) * sz * 0.34,
-             cx + Math.cos(a) * sz * 0.47, cy + Math.sin(a) * sz * 0.47, color, width);
+        g.moveTo(cx + Math.cos(a) * sz * 0.34, cy + Math.sin(a) * sz * 0.34);
+        g.lineTo(cx + Math.cos(a) * sz * 0.47, cy + Math.sin(a) * sz * 0.47);
       }
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "sliders") {
+      g.newPath();
       for (i = 0; i < 3; i++) {
         var yy = y + sz * (0.24 + i * 0.26);
-        line(g, x + sz * 0.12, yy, x + sz * 0.88, yy, color, width);
-        circle(g, x + sz * (i === 0 ? 0.34 : i === 1 ? 0.66 : 0.46), yy, sz * 0.075, color, null, 1);
+        g.moveTo(x + sz * 0.12, yy); g.lineTo(x + sz * 0.88, yy);
       }
+      g.strokePath(cachedPen(g, color, width));
+      g.newPath();
+      for (i = 0; i < 3; i++) {
+        var ky = y + sz * (0.24 + i * 0.26);
+        var kx = x + sz * (i === 0 ? 0.34 : i === 1 ? 0.66 : 0.46);
+        g.ellipsePath(kx - sz * 0.075, ky - sz * 0.075, sz * 0.15, sz * 0.15);
+      }
+      g.fillPath(cachedBrush(g, color));
     } else if (name === "image") {
-      g.newPath(); g.rectPath(x + sz * 0.12, y + sz * 0.18, sz * 0.76, sz * 0.64); g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.newPath(); g.rectPath(x + sz * 0.12, y + sz * 0.18, sz * 0.76, sz * 0.64); g.strokePath(cachedPen(g, color, width));
       circle(g, x + sz * 0.34, y + sz * 0.34, sz * 0.07, color, null, 1);
-      g.newPath(); g.moveTo(x + sz * 0.18, y + sz * 0.72); g.lineTo(x + sz * 0.42, y + sz * 0.48); g.lineTo(x + sz * 0.58, y + sz * 0.64); g.lineTo(x + sz * 0.7, y + sz * 0.52); g.lineTo(x + sz * 0.84, y + sz * 0.72); g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.newPath(); g.moveTo(x + sz * 0.18, y + sz * 0.72); g.lineTo(x + sz * 0.42, y + sz * 0.48); g.lineTo(x + sz * 0.58, y + sz * 0.64); g.lineTo(x + sz * 0.7, y + sz * 0.52); g.lineTo(x + sz * 0.84, y + sz * 0.72); g.strokePath(cachedPen(g, color, width));
     } else if (name === "file") {
       g.newPath();
       g.moveTo(x + sz * 0.24, y + sz * 0.1);
@@ -1187,14 +1280,14 @@
       g.lineTo(x + sz * 0.78, y + sz * 0.28);
       g.lineTo(x + sz * 0.78, y + sz * 0.9);
       g.lineTo(x + sz * 0.24, y + sz * 0.9);
-      g.closePath(); g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
-      line(g, x + sz * 0.6, y + sz * 0.1, x + sz * 0.6, y + sz * 0.3, color, width);
-      line(g, x + sz * 0.6, y + sz * 0.3, x + sz * 0.78, y + sz * 0.3, color, width);
+      g.closePath();
+      g.moveTo(x + sz * 0.6, y + sz * 0.1); g.lineTo(x + sz * 0.6, y + sz * 0.3);
+      g.moveTo(x + sz * 0.6, y + sz * 0.3); g.lineTo(x + sz * 0.78, y + sz * 0.3);
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "refresh") {
-      arcPath(g, cx, cy, sz * 0.32, -Math.PI * 0.15, Math.PI * 1.45, 18);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
-      g.newPath(); g.moveTo(cx + sz * 0.36, cy - sz * 0.36); g.lineTo(cx + sz * 0.5, cy - sz * 0.1); g.lineTo(cx + sz * 0.18, cy - sz * 0.16);
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      arcPath(g, cx, cy, sz * 0.32, -Math.PI * 0.15, Math.PI * 1.45, 12);
+      g.moveTo(cx + sz * 0.36, cy - sz * 0.36); g.lineTo(cx + sz * 0.5, cy - sz * 0.1); g.lineTo(cx + sz * 0.18, cy - sz * 0.16);
+      g.strokePath(cachedPen(g, color, width));
     } else if (name === "sparkle") {
       g.newPath();
       g.moveTo(cx, cy - sz * 0.5);
@@ -1206,19 +1299,21 @@
       g.lineTo(cx - sz * 0.5, cy);
       g.lineTo(cx - sz * 0.14, cy - sz * 0.14);
       g.closePath();
-      g.fillPath(g.newBrush(g.BrushType.SOLID_COLOR, color));
+      g.fillPath(cachedBrush(g, color));
     } else if (name === "external") {
-      g.newPath(); g.rectPath(x + sz * 0.16, y + sz * 0.28, sz * 0.52, sz * 0.56); g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.newPath(); g.rectPath(x + sz * 0.16, y + sz * 0.28, sz * 0.52, sz * 0.56); g.strokePath(cachedPen(g, color, width));
       line(g, x + sz * 0.46, y + sz * 0.14, x + sz * 0.84, y + sz * 0.14, color, width);
       line(g, x + sz * 0.84, y + sz * 0.14, x + sz * 0.84, y + sz * 0.52, color, width);
       line(g, x + sz * 0.82, y + sz * 0.16, x + sz * 0.5, y + sz * 0.48, color, width);
     } else if (name === "more") {
-      circle(g, cx - sz * 0.26, cy, sz * 0.09, color, null, 1);
-      circle(g, cx, cy, sz * 0.09, color, null, 1);
-      circle(g, cx + sz * 0.26, cy, sz * 0.09, color, null, 1);
+      g.newPath();
+      g.ellipsePath(cx - sz * 0.35, cy - sz * 0.09, sz * 0.18, sz * 0.18);
+      g.ellipsePath(cx - sz * 0.09, cy - sz * 0.09, sz * 0.18, sz * 0.18);
+      g.ellipsePath(cx + sz * 0.17, cy - sz * 0.09, sz * 0.18, sz * 0.18);
+      g.fillPath(cachedBrush(g, color));
     } else if (name === "warning") {
       g.newPath(); g.moveTo(cx, cy - sz * 0.42); g.lineTo(cx + sz * 0.44, cy + sz * 0.36); g.lineTo(cx - sz * 0.44, cy + sz * 0.36); g.closePath();
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, color, width));
+      g.strokePath(cachedPen(g, color, width));
       line(g, cx, cy - sz * 0.12, cx, cy + sz * 0.12, color, width);
       circle(g, cx, cy + sz * 0.24, sz * 0.035, color, null, 1);
     }
@@ -1565,8 +1660,8 @@
     }
     if (nf) {
       var nfh = hoverKey === "newFolder";
-      fillRound(g, nf.x, nf.y, nf.w, nf.h, 7, nfh ? C.cardHi : C.field);
-      strokeRound(g, nf.x, nf.y, nf.w, nf.h, 7, nfh ? withAlpha(C.accent, 0.7) : C.line, 1);
+      fillStrokeRound(g, nf.x, nf.y, nf.w, nf.h, 7, nfh ? C.cardHi : C.field,
+        nfh ? withAlpha(C.accent, 0.7) : C.line, 1);
       drawIcon(g, "plus", nf.x + nf.w / 2, nf.y + nf.h / 2, 14, nfh ? C.accent : C.muted, 1.5);
     }
     if (L.navScroll) {
@@ -1603,8 +1698,7 @@
     var t = L.railTip;
     if (!t) return;
     fillRound(g, t.x + 2, t.y + 3, t.w, t.h, 7, withAlpha([0, 0, 0], 0.35));
-    fillRound(g, t.x, t.y, t.w, t.h, 7, C.card);
-    strokeRound(g, t.x, t.y, t.w, t.h, 7, withAlpha(C.accent, 0.32), 1);
+    fillStrokeRound(g, t.x, t.y, t.w, t.h, 7, C.card, withAlpha(C.accent, 0.32), 1);
     textBox(g, t.label, t.x + 10, t.y, t.w - 20, t.h, 8.5, C.text, "left", false, t.w - 20);
   }
   function drawHeader(g) {
@@ -1633,14 +1727,14 @@
   }
   function drawAddButton(g, r, key) {
     var h = hoverKey === key, hot = h || key === "chipAdd" || key === "subAdd";
-    fillRound(g, r.x, r.y, r.w, r.h, 7, h ? C.cardHi : C.field);
-    strokeRound(g, r.x, r.y, r.w, r.h, 7, hot ? withAlpha(C.accent, 0.6) : C.line, 1);
+    fillStrokeRound(g, r.x, r.y, r.w, r.h, 7, h ? C.cardHi : C.field,
+      hot ? withAlpha(C.accent, 0.6) : C.line, 1);
     drawIcon(g, "plus", r.x + r.w / 2, r.y + r.h / 2, 13, hot ? C.accent : C.muted, 1.5);
   }
   function drawSearch(g) {
     var r = L.header.search, focused = focus && focus.id === "search";
-    fillRound(g, r.x, r.y, r.w, r.h, 8, focused ? C.fieldHi : C.field);
-    strokeRound(g, r.x, r.y, r.w, r.h, 8, focused ? withAlpha(C.accent, 0.7) : C.line, 1);
+    fillStrokeRound(g, r.x, r.y, r.w, r.h, 8, focused ? C.fieldHi : C.field,
+      focused ? withAlpha(C.accent, 0.7) : C.line, 1);
     drawIcon(g, "search", r.x + 15, r.y + r.h / 2, 12, focused ? C.accent : C.faint, 1.4);
     var tx = r.x + 26, tw = r.w - (trimStr(S.search) ? 52 : 34);
     var shown = S.search || "";
@@ -1672,8 +1766,8 @@
   }
   function drawModeButton(g) {
     var r = L.header.mode, m = modeInfo(S.display), hov = hoverKey === "mode";
-    fillRound(g, r.x, r.y, r.w, r.h, 8, hov ? C.fieldHi : C.field);
-    strokeRound(g, r.x, r.y, r.w, r.h, 8, hov ? C.lineHi : C.line, 1);
+    fillStrokeRound(g, r.x, r.y, r.w, r.h, 8, hov ? C.fieldHi : C.field,
+      hov ? C.lineHi : C.line, 1);
     var showLabel = r.w >= 74;
     drawIcon(g, m.icon, r.x + 14, r.y + r.h / 2, 12, C.muted, 1.35);
     if (showLabel) textBox(g, m.label, r.x + 25, r.y, r.w - 42, r.h, 9, C.text, "left", false, r.w - 44);
@@ -1684,25 +1778,61 @@
     if (active) {
       fillRound(g, c.x, c.y, c.w, c.h, 7, C.accent);
     } else {
-      fillRound(g, c.x, c.y, c.w, c.h, 7, hov ? C.cardHi : C.field);
-      strokeRound(g, c.x, c.y, c.w, c.h, 7, C.line, 1);
+      fillStrokeRound(g, c.x, c.y, c.w, c.h, 7, hov ? C.cardHi : C.field, C.line, 1);
     }
     var maxText = c.w - 18;
     textBox(g, c.label, c.x + 10, c.y, maxText, c.h, 12.5, active ? C.onAccent : C.text, "left", active, maxText);
   }
+  function cardRectSubpath(g, card) {
+    var r = card;
+    g.moveTo(r.x, r.y);
+    g.lineTo(r.x + r.w, r.y);
+    g.lineTo(r.x + r.w, r.y + r.h);
+    g.lineTo(r.x, r.y + r.h);
+    g.closePath();
+  }
   function drawCards(g) {
-    var i;
+    var i, card, visible = [];
     for (i = 0; i < L.cards.length; i++) {
-      var card = L.cards[i];
+      card = L.cards[i];
       if (card.y + card.h < L.grid.y - 2 || card.y > L.grid.y + L.grid.h + 2) continue;
-      drawFileRow(g, card);
+      visible.push(card);
     }
+    // 批量画普通卡片底色/描边：一次 fillPath / strokePath 搞定整屏卡片，
+    // 只有 hover / 选中的少数卡片单独绘制。
+    var any = false;
+    g.newPath();
+    for (i = 0; i < visible.length; i++) {
+      card = visible[i];
+      if (hoverKey === "card:" + card.p.path) continue;
+      cardRectSubpath(g, card); any = true;
+    }
+    if (any) g.fillPath(cachedBrush(g, C.card));
+    for (i = 0; i < visible.length; i++) {
+      card = visible[i];
+      if (hoverKey !== "card:" + card.p.path) continue;
+      fillRound(g, card.x, card.y, card.w, card.h, 9, C.cardHi);
+    }
+    any = false;
+    g.newPath();
+    for (i = 0; i < visible.length; i++) {
+      card = visible[i];
+      if (card.p.path === S.current) continue;
+      cardRectSubpath(g, card); any = true;
+    }
+    if (any) g.strokePath(cachedPen(g, C.line, 1));
+    for (i = 0; i < visible.length; i++) {
+      card = visible[i];
+      if (card.p.path !== S.current) continue;
+      strokeRound(g, card.x, card.y, card.w, card.h, 9, withAlpha(C.accent, 0.8), 1.4);
+    }
+    for (i = 0; i < visible.length; i++) drawFileRow(g, visible[i], true);
     if (L.addCard) drawAddCard(g, L.addCard);
   }
   function drawAddCard(g, r) {
     var hov = hoverKey === "empty:addPreset" || hoverKey === "addPreset";
-    fillRound(g, r.x, r.y, r.w, r.h, 9, hov ? C.cardHi : C.card);
-    strokeRound(g, r.x, r.y, r.w, r.h, 9, hov ? withAlpha(C.accent, 0.65) : C.line, 1);
+    fillStrokeRound(g, r.x, r.y, r.w, r.h, 9, hov ? C.cardHi : C.card,
+      hov ? withAlpha(C.accent, 0.65) : C.line, 1);
     drawIcon(g, "plus", r.x + r.w / 2, r.y + r.h / 2, 18, hov ? C.accent : C.muted, 1.6);
   }
   function drawCard(g, card) {
@@ -1738,7 +1868,7 @@
     }
   }
   function drawThumb(g, p, r, hov, selected) {
-    var base = hsl(p.hue * 360 + 18, 0.38, 0.20);
+    var base = p.thumbCol || hsl(p.hue * 360 + 18, 0.38, 0.20);
     fillRound(g, r.x, r.y, r.w, r.h, 8, base);
     var pad = Math.max(8, Math.min(16, r.w * 0.08));
     if (p.curve && p.curve.length >= 2) {
@@ -1750,7 +1880,7 @@
         y1 = py + (1 - pts[i][1]) * ph;
         if (i === 0) g.moveTo(x1, y1); else g.lineTo(x1, y1);
       }
-      g.strokePath(g.newPen(g.PenType.SOLID_COLOR, withAlpha(C.accent, 0.9), Math.max(1.2, r.w / 90)));
+      g.strokePath(cachedPen(g, withAlpha(C.accent, 0.9), Math.max(1.2, r.w / 90)));
       for (i = 0; i < pts.length && i < 14; i++) {
         x1 = px + pts[i][0] * pw; y1 = py + (1 - pts[i][1]) * ph;
         circle(g, x1, y1, 2.2, C.accent, null, 1);
@@ -1789,16 +1919,16 @@
       drawText(g, "读取失败", r.x + 13, r.y + r.h - 12, 7.5, C.danger, false);
     }
   }
-  function drawFileRow(g, card) {
+  function drawFileRow(g, card, noBg) {
     var p = card.p, r = card, selected = p.path === S.current, hov = hoverKey === "card:" + p.path;
-    fillRound(g, r.x, r.y, r.w, r.h, 9, hov ? C.cardHi : C.card);
-    strokeRound(g, r.x, r.y, r.w, r.h, 9, selected ? withAlpha(C.accent, 0.8) : C.line, selected ? 1.4 : 1);
-    var col = hsl(p.hue * 360 + 40, 0.5, 0.46);
-    fillRound(g, r.x + 10, r.y + 10, 3, r.h - 20, 1.5, p.broken ? C.danger : col);
-    var iconX = r.x + 28;
+    if (!noBg) {
+      fillStrokeRound(g, r.x, r.y, r.w, r.h, 9, hov ? C.cardHi : C.card,
+        selected ? withAlpha(C.accent, 0.8) : C.line, selected ? 1.4 : 1);
+    }
+    var iconX = r.x + 14;
     drawIcon(g, p.keys ? "sliders" : (p.effects ? "image" : "file"), iconX, r.y + r.h / 2, 16, p.broken ? C.danger : C.muted, 1.2);
-    var nameW = Math.max(30, r.w - 58 - (r.w > 360 ? 112 : 12));
-    textBox(g, p.name || p.filename, r.x + 44, r.y, nameW, r.h, 12.5, C.text, "left", true, nameW);
+    var nameW = Math.max(30, r.w - 44 - (r.w > 360 ? 112 : 12));
+    textBox(g, p.name || p.filename, r.x + 30, r.y, nameW, r.h, 12.5, C.text, "left", true, nameW);
     if (r.w > 360) {
       textBox(g, p.broken ? "无法读取" : p.meta, r.x + r.w - 122, r.y, 108, r.h, 9.2, p.broken ? C.danger : C.faint, "right", false, 108);
     }
@@ -1820,8 +1950,7 @@
     if (by + 28 < r.y + r.h) L.emptyButtons = [{ id: "clearSearch", x: cx - bw / 2, y: by, w: bw, h: 28, label: "清除搜索" }];
     for (var i = 0; i < L.emptyButtons.length; i++) {
       var b = L.emptyButtons[i], hov2 = hoverKey === "empty:" + b.id;
-      fillRound(g, b.x, b.y, b.w, b.h, 7, hov2 ? C.cardHi : C.field);
-      strokeRound(g, b.x, b.y, b.w, b.h, 7, C.line, 1);
+      fillStrokeRound(g, b.x, b.y, b.w, b.h, 7, hov2 ? C.cardHi : C.field, C.line, 1);
       textBox(g, b.label, b.x, b.y, b.w, b.h, 10, C.text, "center", false, b.w - 6);
     }
   }
@@ -1859,8 +1988,7 @@
     var x = Math.round((W - tw) / 2);
     var y = H - L.footer.h - 42;
     var col = toastKind === "warn" ? C.danger : C.accent;
-    fillRound(g, x, y, tw, 30, 8, withAlpha([0.02, 0.03, 0.03], 0.94));
-    strokeRound(g, x, y, tw, 30, 8, withAlpha(col, 0.28), 1);
+    fillStrokeRound(g, x, y, tw, 30, 8, withAlpha([0.02, 0.03, 0.03], 0.94), withAlpha(col, 0.28), 1);
     circle(g, x + 15, y + 15, 3, col, null, 1);
     textBox(g, msg, x + 25, y, tw - 32, 30, 8.8, C.text, "left", false, tw - 34);
   }
@@ -2181,7 +2309,6 @@
       for (i = 0; i < S.recent.length; i++) if (S.recent[i] !== p.path) nr.push(S.recent[i]);
       S.recent = nr;
       if (S.current === p.path) S.current = "";
-      CACHE = {};
       scanLibrary();
       saveState(true);
       showToast("已删除 · " + (p.filename || p.name));
@@ -2252,7 +2379,6 @@
         if (S.recent[i].indexOf(prefix) !== 0) nr.push(S.recent[i]);
       }
       S.recent = nr;
-      CACHE = {};
       scanLibrary();
       saveState(true);
       showToast("已删除文件夹 · " + folderObj.name);
@@ -2276,6 +2402,8 @@
   }
 
   function refreshLibrary() {
+    // A manual refresh must see external edits: drop the read cache first.
+    // Startup/automatic scans keep it so refresh stays cheap when nothing changed.
     CACHE = {};
     scanLibrary();
     saveState(true);
@@ -2527,13 +2655,13 @@
     }
     var hit = hitTest(e.clientX, e.clientY);
     var hk = hit ? keyOf(hit) : "";
-    if (hit && hit.kind === "card") hk = "card:" + hit.path;
+    if (hit && (hit.kind === "card" || hit.kind === "nav" || hit.kind === "chip")) hk = "";
     if (hk !== hoverKey) { hoverKey = hk; redraw(); }
   }
   function onMouseUp(e) {
     noteButtons(e);
     if (drag) {
-      if (drag.kind === "zoom" || drag.kind === "scrollbar" || drag.kind === "navScroll" || drag.kind === "chipScroll") saveState(true);
+      if (drag.kind === "zoom") saveState(true);
       drag = null;
       press = null;
       redraw(true);
@@ -2558,7 +2686,7 @@
   function onMouseOut(e) {
     noteButtons(e);
     if (drag && e.buttons === 0) {
-      if (drag.kind === "zoom" || drag.kind === "scrollbar" || drag.kind === "navScroll" || drag.kind === "chipScroll") saveState(true);
+      if (drag.kind === "zoom") saveState(true);
       drag = null; press = null;
     }
     hoverKey = null;
@@ -2696,12 +2824,14 @@
 
   // ---------------------------------------------------------------- draw loop / init
   function redraw(force) {
-    if (!canvas) return;
+    if (!canvas || drawing) return;
     var t = nowMs();
-    if (!force && t - lastPaint < 16) return;
+    if (!force && t - lastPaint < 30) return;
     lastPaint = t;
+    drawing = true;
     try { (win || canvas.window).layout.layout(true); }
     catch (e) { try { canvas.notify("onDraw"); } catch (e2) {} }
+    drawing = false;
   }
   function onDraw() {
     var g;
@@ -2767,8 +2897,24 @@
     try { canvas.addEventListener("keydown", onKey); } catch (e8) {}
     try { root.onKeyDown = onKey; } catch (e9) {}
     try { root.addEventListener("keydown", onKey); } catch (e10) {}
-    root.onResizing = function () { redraw(); };
-    root.onResize = function () { redraw(true); };
+    root.onResizing = function () {
+      try {
+        var s = canvas.size;
+        if (s[0] !== lastCanvasW || s[1] !== lastCanvasH) {
+          lastCanvasW = s[0]; lastCanvasH = s[1];
+          redraw();
+        }
+      } catch (e) { redraw(); }
+    };
+    root.onResize = function () {
+      try {
+        var s = canvas.size;
+        if (s[0] !== lastCanvasW || s[1] !== lastCanvasH) {
+          lastCanvasW = s[0]; lastCanvasH = s[1];
+          redraw(true);
+        }
+      } catch (e) { redraw(true); }
+    };
     try { root.layout.layout(true); } catch (e11) {}
     if (!ok || !S.onboarded) {
       openOnboarding(true);
